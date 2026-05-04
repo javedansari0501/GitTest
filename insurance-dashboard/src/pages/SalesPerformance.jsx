@@ -1,265 +1,261 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
-  BarChart, Bar, LineChart, Line, ComposedChart, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
+  BarChart, Bar, LineChart, Line, ComposedChart, RadarChart, Radar,
+  PolarGrid, PolarAngleAxis, PolarRadiusAxis,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell,
 } from 'recharts';
-import { useFilters } from '../App.jsx';
+import { useApp } from '../App.jsx';
 import {
-  getData, aggregateByCountry, getTimeSeriesData, getYearlyComparison, COUNTRIES,
+  getData, getAgentTierData, aggregateByCountry, aggregateByPeriod,
+  aggregateByAgentTier, getTimeSeriesData, getYearlyComparison,
+  COUNTRIES, AGENT_TIERS, TIER_COLORS,
 } from '../services/dataService.js';
 import KPICard from '../components/KPICard.jsx';
+import DrillBreadcrumb from '../components/DrillBreadcrumb.jsx';
+import DataTable from '../components/DataTable.jsx';
 import { fmt } from '../utils/formatters.js';
 
-const CC  = Object.fromEntries(COUNTRIES.map(c => [c.code, c.color]));
-const TICK = { fontSize: 11, fill: '#64748b' };
+const CC   = Object.fromEntries(COUNTRIES.map(c => [c.code, c.color]));
+const TICK = { fontSize: 11, fill: '#64748B' };
 
 export default function SalesPerformance() {
-  const { filters, selectedCountries } = useFilters();
+  const { filters, priorFilters, selectedCountries } = useApp();
+  const [drill, setDrill] = useState({ level: 0, tier: null });
 
-  const data          = useMemo(() => getData(filters), [filters]);
-  const byCtry        = useMemo(() => aggregateByCountry(data), [data]);
-  const yearly        = useMemo(() => getYearlyComparison(data), [data]);
-  const agentSeries   = useMemo(() => getTimeSeriesData(data, 'avgPoliciesPerAgent', selectedCountries), [data]);
-  const achieveSeries = useMemo(() => getTimeSeriesData(data, 'achievementRate', selectedCountries), [data]);
+  const data      = useMemo(() => getData(filters),        [filters]);
+  const priorData = useMemo(() => getData(priorFilters),   [priorFilters]);
+  const atData    = useMemo(() => getAgentTierData(filters), [filters]);
+  const byCtry    = useMemo(() => aggregateByCountry(data),  [data]);
+  const byMo      = useMemo(() => aggregateByPeriod(data),   [data]);
+  const byTier    = useMemo(() => aggregateByAgentTier(atData), [atData]);
+  const yearly    = useMemo(() => getYearlyComparison(data),   [data]);
+  const ppaTS     = useMemo(() => getTimeSeriesData(data, 'avgPoliciesPerAgent'), [data]);
 
-  const totals = useMemo(() => data.reduce((a, r) => ({
-    policiesSold:   a.policiesSold   + r.policiesSold,
-    policiesTarget: a.policiesTarget + r.policiesTarget,
-    newPremium:     a.newPremium     + r.newPremium,
-    premiumTarget:  a.premiumTarget  + r.premiumTarget,
-    agents:         Math.max(a.agents, r.activeAgents),
-  }), { policiesSold: 0, policiesTarget: 0, newPremium: 0, premiumTarget: 0, agents: 0 }), [data]);
+  const totals = useMemo(() => {
+    const t = data.reduce((a, r) => ({
+      policiesSold:   a.policiesSold   + r.policiesSold,
+      policiesTarget: a.policiesTarget + r.policiesTarget,
+      newPremium:     a.newPremium     + r.newPremium,
+      premiumTarget:  a.premiumTarget  + r.premiumTarget,
+      newAgents:      a.newAgents      + r.newAgents,
+      agentChurn:     a.agentChurn     + r.agentChurn,
+      peakAgents:     Math.max(a.peakAgents, r.activeAgents),
+    }), { policiesSold:0, policiesTarget:0, newPremium:0, premiumTarget:0, newAgents:0, agentChurn:0, peakAgents:0 });
+    t.achPolicies = t.policiesTarget ? (t.policiesSold / t.policiesTarget) * 100 : 100;
+    t.achPremium  = t.premiumTarget  ? (t.newPremium   / t.premiumTarget)  * 100 : 100;
+    return t;
+  }, [data]);
 
-  const policyAchieve  = totals.policiesTarget ? (totals.policiesSold / totals.policiesTarget) * 100 : 0;
-  const premiumAchieve = totals.premiumTarget  ? (totals.newPremium   / totals.premiumTarget)  * 100 : 0;
-  const avgPPA = byCtry.length
-    ? byCtry.reduce((a, c) => a + c.avgPoliciesPerAgent, 0) / byCtry.length : 0;
+  const priorT = useMemo(() => priorData.reduce((a,r) => ({
+    policiesSold: a.policiesSold + r.policiesSold,
+    newPremium:   a.newPremium   + r.newPremium,
+  }), { policiesSold:0, newPremium:0 }), [priorData]);
 
+  const avgPPA = useMemo(() => {
+    const rows = byCtry;
+    if (!rows.length) return 0;
+    return Math.round((rows.reduce((a,c) => a + c.avgPoliciesPerAgent, 0) / rows.length) * 10) / 10;
+  }, [byCtry]);
+
+  // Target vs actual by country
   const targetBar = byCtry.map(c => ({
     name: COUNTRIES.find(x => x.code === c.country)?.flag + ' ' + c.countryName,
     code: c.country,
-    'Policies Sold':   c.policiesSold,
-    'Policies Target': c.policiesTarget,
-    'Achievement (%)': c.achievementPolicies,
+    'Sold':   c.policiesSold,
+    'Target': c.policiesTarget,
+    'Ach. %': c.achievementPolicies,
   }));
 
-  const premiumTargetBar = byCtry.map(c => ({
-    name: COUNTRIES.find(x => x.code === c.country)?.flag + ' ' + c.countryName,
-    code: c.country,
-    'New Premium': Math.round(c.newPremium / 1000),
-    'Target':      Math.round(c.premiumTarget / 1000),
-  }));
+  // Tier drill-down
+  const tierBar = drill.level === 0
+    ? AGENT_TIERS.map(tier => {
+        const rows = byTier.filter(r => r.tier === tier);
+        return {
+          tier,
+          agentCount:   rows.reduce((a,r) => a + r.agentCount, 0),
+          policiesSold: rows.reduce((a,r) => a + r.policiesSold, 0),
+          newPremium:   Math.round(rows.reduce((a,r) => a + r.newPremium, 0) / 1000),
+          avgPPA:       rows.length ? Math.round((rows.reduce((a,r) => a + r.avgPoliciesPerAgent, 0) / rows.length) * 10) / 10 : 0,
+        };
+      })
+    : byTier.filter(r => r.tier === drill.tier).map(r => ({
+        tier: COUNTRIES.find(c => c.code === r.country)?.flag + ' ' + r.countryName,
+        code: r.country,
+        agentCount: r.agentCount, policiesSold: r.policiesSold,
+        newPremium: Math.round(r.newPremium / 1000), avgPPA: r.avgPoliciesPerAgent,
+      }));
 
-  const ppaBar = byCtry.map(c => ({
-    name: COUNTRIES.find(x => x.code === c.country)?.flag + ' ' + c.countryName,
-    code: c.country,
-    'Policies/Agent': c.avgPoliciesPerAgent,
-    'Peak Agents':    c.activeAgents,
-  }));
+  // Radar data (indexed performance)
+  const maxVals = byCtry.reduce((mx, c) => ({
+    policiesSold: Math.max(mx.policiesSold, c.policiesSold),
+    newPremium:   Math.max(mx.newPremium,   c.newPremium),
+    avgPPA:       Math.max(mx.avgPPA,       c.avgPoliciesPerAgent),
+    achievementPolicies: Math.max(mx.achievementPolicies, c.achievementPolicies),
+    conversionRate: Math.max(mx.conversionRate, c.conversionRate),
+  }), { policiesSold:1, newPremium:1, avgPPA:1, achievementPolicies:1, conversionRate:1 });
 
-  const radarData = byCtry.map(c => {
-    const maxCtry = byCtry.reduce((mx, x) => ({
-      policiesSold: Math.max(mx.policiesSold, x.policiesSold),
-      newPremium:   Math.max(mx.newPremium,   x.newPremium),
-      avgPoliciesPerAgent: Math.max(mx.avgPoliciesPerAgent, x.avgPoliciesPerAgent),
-      campaignROI:  Math.max(mx.campaignROI,  x.campaignROI),
-      conversionRate: Math.max(mx.conversionRate, x.conversionRate),
-    }), { policiesSold: 1, newPremium: 1, avgPoliciesPerAgent: 1, campaignROI: 1, conversionRate: 1 });
-    return {
-      country: COUNTRIES.find(x => x.code === c.country)?.flag + ' ' + c.countryName,
-      'Policies':    Math.round((c.policiesSold / maxCtry.policiesSold) * 100),
-      'Premium':     Math.round((c.newPremium   / maxCtry.newPremium)   * 100),
-      'Agent Prod.': Math.round((c.avgPoliciesPerAgent / maxCtry.avgPoliciesPerAgent) * 100),
-      'ROI':         Math.round((c.campaignROI  / maxCtry.campaignROI)  * 100),
-      'Conversion':  Math.round((c.conversionRate / maxCtry.conversionRate) * 100),
-    };
+  const radarData = ['Volume','Premium','Productivity','Achievement','Conversion'].map(label => {
+    const entry = { label };
+    byCtry.forEach(c => {
+      const meta = COUNTRIES.find(x => x.code === c.country);
+      const vals = [c.policiesSold/maxVals.policiesSold, c.newPremium/maxVals.newPremium,
+        c.avgPoliciesPerAgent/maxVals.avgPPA, c.achievementPolicies/maxVals.achievementPolicies,
+        c.conversionRate/maxVals.conversionRate];
+      entry[c.country] = Math.round(vals[['Volume','Premium','Productivity','Achievement','Conversion'].indexOf(label)] * 100);
+    });
+    return entry;
   });
+
+  // Agent tier table
+  const tierTableData = byTier.map(r => ({ ...r }));
+  const tierTableCols = [
+    { key: 'countryName',         label: 'Country' },
+    { key: 'tier',                label: 'Tier' },
+    { key: 'agentCount',          label: 'Agents',    render: v => fmt.number(v) },
+    { key: 'policiesSold',        label: 'Policies',  render: v => fmt.number(v) },
+    { key: 'avgPoliciesPerAgent', label: 'Avg Pol/Agent' },
+    { key: 'newPremium',          label: 'Premium',   render: v => fmt.currency(v) },
+    { key: 'avgPremiumPerAgent',  label: 'Avg Prem/Agent', render: v => '$'+fmt.number(v) },
+    { key: 'avgTrainingHours',    label: 'Avg Training Hrs' },
+  ];
 
   return (
     <>
       <div className="kpi-grid">
-        <KPICard label="Peak Active Agents"   value={fmt.number(totals.agents)}           sub="Max in any month"         accent="#3b82f6" />
-        <KPICard label="Avg Policies/Agent"   value={avgPPA.toFixed(1)}                   sub="Monthly average"          accent="#8b5cf6" />
-        <KPICard label="Policy Achievement"   value={fmt.percent(policyAchieve)}          sub="vs target"                accent="#10b981" />
-        <KPICard label="Premium Achievement"  value={fmt.percent(premiumAchieve)}         sub="vs target"                accent="#f59e0b" />
-        <KPICard label="Total Policies Sold"  value={fmt.number(totals.policiesSold)}     sub="All countries"            accent="#ef4444" />
+        <KPICard label="Policies Sold"     value={fmt.number(totals.policiesSold)}  sub="All agents"          change={fmt.change(totals.policiesSold, priorT.policiesSold)} changeSub="vs prior" achievement={totals.achPolicies} accent="#3B82F6"/>
+        <KPICard label="Policy Achievement" value={fmt.percent(totals.achPolicies)} sub="vs target"           accent="#10B981"/>
+        <KPICard label="Premium Achievement"value={fmt.percent(totals.achPremium)}  sub="vs target"           accent="#8B5CF6"/>
+        <KPICard label="Peak Active Agents" value={fmt.number(totals.peakAgents)}   sub="Max in any month"    accent="#F59E0B"/>
+        <KPICard label="Avg Policies/Agent" value={avgPPA}                          sub="Monthly average"     accent="#EF4444"/>
+        <KPICard label="Net Agent Growth"   value={fmt.number(totals.newAgents - totals.agentChurn)} sub="Recruits minus churn" accent="#06B6D4"/>
       </div>
 
-      <div className="charts-row charts-2col">
+      {/* Target vs actual + tier drill */}
+      <div className="charts-row col-2">
         <div className="chart-card">
-          <div className="chart-header">
+          <div className="chart-hdr">
             <div className="chart-title">Policies Sold vs Target by Country</div>
           </div>
           <ResponsiveContainer width="100%" height={240}>
             <BarChart data={targetBar}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} />
-              <YAxis tick={TICK} tickFormatter={fmt.axis.count} />
-              <Tooltip formatter={v => [fmt.number(v)]} />
-              <Legend />
-              <Bar dataKey="Policies Target" fill="#e2e8f0" radius={[4,4,0,0]} />
-              <Bar dataKey="Policies Sold"   radius={[4,4,0,0]}>
-                {targetBar.map((e, i) => <Cell key={i} fill={CC[e.code]} />)}
+              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9"/>
+              <XAxis dataKey="name" tick={{ fontSize:10, fill:'#64748B' }}/>
+              <YAxis tick={TICK} tickFormatter={fmt.axis.count}/>
+              <Tooltip formatter={v => [fmt.number(v)]}/>
+              <Legend wrapperStyle={{ fontSize: 11 }}/>
+              <Bar dataKey="Target" fill="#E2E8F0" radius={[4,4,0,0]}/>
+              <Bar dataKey="Sold"   radius={[4,4,0,0]}>
+                {targetBar.map((e,i) => <Cell key={i} fill={CC[e.code]}/>)}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
 
         <div className="chart-card">
-          <div className="chart-header">
-            <div className="chart-title">New Premium vs Target by Country</div>
-            <div className="chart-sub">USD thousands</div>
+          <div className="chart-hdr">
+            <div>
+              <div className="chart-title">
+                {drill.level === 0 ? 'Performance by Agent Tier' : `${drill.tier} Tier — by Country`}
+              </div>
+              <div className="chart-sub">
+                {drill.level === 0 ? 'Click tier to see country breakdown' : ''}
+              </div>
+            </div>
           </div>
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={premiumTargetBar}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} />
-              <YAxis tick={TICK} tickFormatter={v => '$' + v + 'K'} />
-              <Tooltip formatter={v => ['$' + fmt.number(v * 1000)]} />
-              <Legend />
-              <Bar dataKey="Target"      fill="#e2e8f0" radius={[4,4,0,0]} />
-              <Bar dataKey="New Premium" fill="#3b82f6" radius={[4,4,0,0]} />
+          <DrillBreadcrumb path={drill.level > 0 ? [drill.tier] : []} onNavigate={() => setDrill({ level:0, tier:null })}/>
+          <ResponsiveContainer width="100%" height={210}>
+            <BarChart data={tierBar}
+              onClick={d => {
+                if (drill.level === 0 && d?.activePayload?.[0]) {
+                  const t = d.activePayload[0].payload.tier;
+                  if (AGENT_TIERS.includes(t)) setDrill({ level:1, tier:t });
+                }
+              }}
+              style={{ cursor: drill.level === 0 ? 'pointer' : 'default' }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9"/>
+              <XAxis dataKey="tier" tick={{ fontSize:10, fill:'#64748B' }}/>
+              <YAxis yAxisId="l" tick={TICK} tickFormatter={fmt.axis.count}/>
+              <YAxis yAxisId="r" orientation="right" tick={TICK}/>
+              <Tooltip/>
+              <Legend wrapperStyle={{ fontSize: 11 }}/>
+              <Bar yAxisId="l" dataKey="policiesSold" name="Policies" radius={[4,4,0,0]}>
+                {tierBar.map((e,i) => <Cell key={i} fill={TIER_COLORS[e.tier] || CC[e.code] || '#3B82F6'}/>)}
+              </Bar>
+              <Bar yAxisId="r" dataKey="avgPPA" name="Avg Pol/Agent" fill="#BFDBFE" radius={[4,4,0,0]}/>
             </BarChart>
           </ResponsiveContainer>
         </div>
       </div>
 
-      <div className="charts-row charts-2col">
+      {/* Agent productivity trend + radar */}
+      <div className="charts-row col-2">
         <div className="chart-card">
-          <div className="chart-header">
-            <div className="chart-title">Agent Productivity by Country</div>
+          <div className="chart-hdr">
+            <div className="chart-title">Agent Productivity Trend</div>
             <div className="chart-sub">Avg policies per agent per month</div>
           </div>
           <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={ppaBar} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis type="number" tick={TICK} />
-              <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} width={110} />
-              <Tooltip />
-              <Bar dataKey="Policies/Agent" radius={[0,4,4,0]}>
-                {ppaBar.map((e, i) => <Cell key={i} fill={CC[e.code]} />)}
-              </Bar>
-            </BarChart>
+            <LineChart data={ppaTS.map(r => ({ ...r, label: r.label }))}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9"/>
+              <XAxis dataKey="label" tick={TICK} interval={2}/>
+              <YAxis tick={TICK}/>
+              <Tooltip formatter={v => [v, 'Pol/Agent']}/>
+              <Legend wrapperStyle={{ fontSize: 11 }}/>
+              {selectedCountries.map(code => {
+                const meta = COUNTRIES.find(c => c.code === code);
+                return <Line key={code} dataKey={code} name={meta?.flag+' '+meta?.name}
+                  stroke={CC[code]} strokeWidth={2} dot={false}/>;
+              })}
+            </LineChart>
           </ResponsiveContainer>
         </div>
 
         <div className="chart-card">
-          <div className="chart-header">
-            <div className="chart-title">Country Performance (Indexed)</div>
-            <div className="chart-sub">100 = best in selected group</div>
+          <div className="chart-hdr">
+            <div className="chart-title">Country Performance Radar (Indexed)</div>
+            <div className="chart-sub">100 = best performing country in selection</div>
           </div>
           <ResponsiveContainer width="100%" height={240}>
             <RadarChart data={radarData}>
-              <PolarGrid stroke="#f1f5f9" />
-              <PolarAngleAxis dataKey="country" tick={{ fontSize: 10 }} />
-              <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
+              <PolarGrid stroke="#F1F5F9"/>
+              <PolarAngleAxis dataKey="label" tick={{ fontSize:10 }}/>
+              <PolarRadiusAxis domain={[0,100]} tick={false} axisLine={false}/>
               {selectedCountries.map(code => {
                 const meta = COUNTRIES.find(c => c.code === code);
-                const d    = radarData.find(r => r.country.includes(meta?.name ?? ''));
-                if (!d) return null;
-                return (
-                  <Radar
-                    key={code}
-                    name={meta?.flag + ' ' + meta?.name}
-                    dataKey={Object.keys(d).find(k => k !== 'country') ?? 'Policies'}
-                    stroke={CC[code]} fill={CC[code]} fillOpacity={0.15}
-                  />
-                );
+                return <Radar key={code} dataKey={code} name={meta?.flag+' '+meta?.name}
+                  stroke={CC[code]} fill={CC[code]} fillOpacity={0.15}/>;
               })}
-              <Legend />
+              <Legend wrapperStyle={{ fontSize: 11 }}/>
             </RadarChart>
           </ResponsiveContainer>
         </div>
       </div>
 
-      <div className="charts-row charts-1col">
+      {/* YoY trend */}
+      <div className="charts-row col-1">
         <div className="chart-card">
-          <div className="chart-header">
-            <div className="chart-title">Monthly Agent Productivity Trend</div>
-            <div className="chart-sub">Avg policies per agent per month</div>
+          <div className="chart-hdr">
+            <div className="chart-title">Year-over-Year Sales Trajectory</div>
           </div>
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={agentSeries.map(r => ({ ...r, label: `${r.monthName}'${String(r.year).slice(2)}` }))}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="label" tick={TICK} interval={5} />
-              <YAxis tick={TICK} />
-              <Tooltip formatter={v => [v, 'Policies/Agent']} />
-              <Legend />
-              {selectedCountries.map(code => {
-                const meta = COUNTRIES.find(c => c.code === code);
-                return (
-                  <Line
-                    key={code} dataKey={code} name={meta?.flag + ' ' + meta?.name}
-                    stroke={CC[code]} strokeWidth={2} dot={false}
-                  />
-                );
-              })}
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      <div className="charts-row charts-1col">
-        <div className="chart-card">
-          <div className="chart-header">
-            <div className="chart-title">Yearly Sales Growth — All Countries</div>
-          </div>
-          <ResponsiveContainer width="100%" height={220}>
+          <ResponsiveContainer width="100%" height={210}>
             <ComposedChart data={yearly}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="year" tick={TICK} />
-              <YAxis yAxisId="l" tick={TICK} tickFormatter={fmt.axis.count} />
-              <YAxis yAxisId="r" orientation="right" tick={TICK} tickFormatter={fmt.axis.currency} />
-              <Tooltip />
-              <Legend />
-              <Bar  yAxisId="l" dataKey="policiesSold" name="Policies Sold" fill="#3b82f6" radius={[4,4,0,0]} />
-              <Line yAxisId="r" dataKey="newPremium"   name="New Premium ($)" stroke="#f59e0b" strokeWidth={2} dot={{ r: 4 }} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9"/>
+              <XAxis dataKey="year" tick={TICK}/>
+              <YAxis yAxisId="l" tick={TICK} tickFormatter={fmt.axis.count}/>
+              <YAxis yAxisId="r" orientation="right" tick={TICK} tickFormatter={fmt.axis.currency}/>
+              <Tooltip/>
+              <Legend wrapperStyle={{ fontSize: 11 }}/>
+              <Bar  yAxisId="l" dataKey="policiesSold" name="Policies Sold" fill="#3B82F6" radius={[4,4,0,0]}/>
+              <Line yAxisId="r" dataKey="newPremium"   name="New Premium"   stroke="#F59E0B" strokeWidth={2} dot={{ r:3 }}/>
             </ComposedChart>
           </ResponsiveContainer>
         </div>
       </div>
 
+      {/* Agent tier table */}
       <div className="chart-card">
-        <div className="chart-header">
-          <div className="chart-title">Sales Team Summary by Country</div>
-        </div>
-        <table className="summary-table">
-          <thead>
-            <tr>
-              <th>Country</th>
-              <th>Peak Agents</th>
-              <th>Policies Sold</th>
-              <th>Target</th>
-              <th>Achievement</th>
-              <th>Avg Policies/Agent</th>
-              <th>New Premium</th>
-              <th>Campaign ROI</th>
-            </tr>
-          </thead>
-          <tbody>
-            {byCtry.map(c => {
-              const meta = COUNTRIES.find(x => x.code === c.country);
-              const ach  = c.achievementPolicies ?? 0;
-              return (
-                <tr key={c.country}>
-                  <td><span className="country-flag-name"><span style={{ fontSize: 16 }}>{meta?.flag}</span>{c.countryName}</span></td>
-                  <td>{fmt.number(c.activeAgents)}</td>
-                  <td>{fmt.number(c.policiesSold)}</td>
-                  <td>{fmt.number(c.policiesTarget)}</td>
-                  <td>
-                    <span className={`badge ${ach >= 100 ? 'badge-green' : ach >= 90 ? 'badge-blue' : 'badge-amber'}`}>
-                      {fmt.percent(ach)}
-                    </span>
-                  </td>
-                  <td>{c.avgPoliciesPerAgent}</td>
-                  <td>{fmt.currency(c.newPremium)}</td>
-                  <td><span className="badge badge-purple">{c.campaignROI}x</span></td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <div className="chart-hdr"><div className="chart-title">Agent Tier Performance Detail</div></div>
+        <DataTable columns={tierTableCols} data={tierTableData} filename="agent-tier-performance"/>
       </div>
     </>
   );
